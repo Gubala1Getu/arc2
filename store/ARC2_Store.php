@@ -10,9 +10,20 @@ ARC2::inc('Class');
 
 class ARC2_Store extends ARC2_Class
 {
+    protected $adapter;
+
     public function __construct($a, &$caller)
     {
         parent::__construct($a, $caller);
+
+        // adapter provides functions to interact with the database system
+        if (null == $this->adapter) {
+            // TODO remove that when using namespaces
+            if (!class_exists("\ARC2\Store\Adapter\mysqliAdapter")) {
+                require __DIR__.'/../src/ARC2/Store/Adapter/mysqliAdapter.php';
+            }
+            $this->adapter = new \ARC2\Store\Adapter\mysqliAdapter($this->a);
+        }
     }
 
     public function __init()
@@ -48,38 +59,56 @@ class ARC2_Store extends ARC2_Class
         foreach (['db_host' => 'localhost', 'db_user' => '', 'db_pwd' => '', 'db_name' => ''] as $k => $v) {
             $this->a[$k] = $this->v($k, $v, $this->a);
         }
-        if (!$db_con = mysqli_connect($this->a['db_host'], $this->a['db_user'], $this->a['db_pwd'])) {
-            return $this->addError(mysqli_error($db_con));
+
+        // try to connect
+        $db_con = $this->adapter->connect();
+        if (!$db_con) {
+            return $this->addError($this->adapter->getErrorMsg());
         }
+
         $this->a['db_con'] = $db_con;
-        if (!mysqli_query($db_con, 'USE `'.$this->a['db_name'].'`')) {
+
+        // try to use given database. if it doesn't exist, try to create it
+        if (!$this->adapter->query('USE `'.$this->a['db_name'].'`')) {
             $fixed = 0;
             /* try to create it */
             if ($this->a['db_name']) {
-                $this->queryDB('
+                $this->adapter->query('
                   CREATE DATABASE IF NOT EXISTS `'.$this->a['db_name'].'`
                   DEFAULT CHARACTER SET utf8
                   DEFAULT COLLATE utf8_general_ci
-                  ', $db_con, 1
+                  ', 1
                 );
-                if (mysqli_query($db_con, 'USE `'.$this->a['db_name'].'`')) {
-                    $this->queryDB("SET NAMES 'utf8'", $db_con);
+                if ($this->adapter->query('USE `'.$this->a['db_name'].'`')) {
+                    $this->adapter->query("SET NAMES 'utf8'");
                     $fixed = 1;
                 }
             }
             if (!$fixed) {
-                return $this->addError(mysqli_error($db_con));
+                return $this->addError($this->adapter->getErrorMsg());
             }
         }
+
+        // set names to UTF-8
         if (preg_match('/^utf8/', $this->getCollation())) {
-            $this->queryDB("SET NAMES 'utf8'", $db_con);
+            $this->adapter->query("SET NAMES 'utf8'");
         }
+
         // This is RDF, we may need many JOINs...
-        $this->queryDB('SET SESSION SQL_BIG_SELECTS=1', $db_con);
+        // TODO find an equivalent in other DBS
+        $this->adapter->query('SET SESSION SQL_BIG_SELECTS=1');
 
         return true;
     }
 
+    public function getDBAdapter()
+    {
+        return $this->adapter;
+    }
+
+    /**
+     * @param int $force Default is 0. 1 means to use force
+     */
     public function getDBCon($force = 0)
     {
         if ($force || !isset($this->a['db_con'])) {
@@ -87,7 +116,7 @@ class ARC2_Store extends ARC2_Class
                 return false;
             }
         }
-        if (!$force && !mysqli_thread_id($this->a['db_con'])) {
+        if (!$force && !$this->adapter->getConnectionId()) {
             return $this->getDBCon(1);
         }
 
@@ -99,16 +128,26 @@ class ARC2_Store extends ARC2_Class
      */
     public function closeDBCon()
     {
-        if ($this->v('db_con', false, $this->a)) {
-            mysqli_close($this->a['db_con']);
+        if (isset($this->a['db_con'])) {
+            $this->adapter->close();
+            unset($this->a['db_con']);
         }
-        unset($this->a['db_con']);
     }
 
     public function getDBVersion()
     {
         if (!$this->v('db_version')) {
-            $this->db_version = preg_match("/^([0-9]+)\.([0-9]+)\.([0-9]+)/", mysqli_get_server_info($this->getDBCon()), $m) ? sprintf('%02d-%02d-%02d', $m[1], $m[2], $m[3]) : '00-00-00';
+            $result = preg_match(
+                "/^([0-9]+)\.([0-9]+)\.([0-9]+)/",
+                $this->adapter->getServerInfo(),
+                $m
+            );
+
+            if ($result) {
+                $this->db_version = sprintf('%02d-%02d-%02d', $m[1], $m[2], $m[3]);
+            } else {
+                $this->db_version = '00-00-00';
+            }
         }
 
         return $this->db_version;
@@ -126,17 +165,25 @@ class ARC2_Store extends ARC2_Class
 
     public function getCollation()
     {
-        $rs = $this->queryDB('SHOW TABLE STATUS LIKE "'.$this->getTablePrefix().'setting"', $this->getDBCon());
+        $row = $this->adapter->fetchRow('SHOW TABLE STATUS LIKE "'.$this->getTablePrefix().'setting"');
 
-        return ($rs && ($row = mysqli_fetch_array($rs)) && isset($row['Collation'])) ? $row['Collation'] : '';
+        if (isset($row['Collation'])) {
+            return $row['Collation'];
+        } else {
+            return '';
+        }
     }
 
     public function getColumnType()
     {
         if (!$this->v('column_type')) {
             $tbl = $this->getTablePrefix().'g2t';
-            $rs = $this->queryDB('SHOW COLUMNS FROM '.$tbl.' LIKE "t"', $this->getDBCon());
-            $row = $rs ? mysqli_fetch_array($rs) : ['Type' => 'mediumint'];
+
+            $row = $this->adapter->fetchRow('SHOW COLUMNS FROM '.$tbl.' LIKE "t"');
+            if (false == is_array($row)) {
+                $row = array('Type' => 'mediumint');
+            }
+
             $this->column_type = preg_match('/mediumint/', $row['Type']) ? 'mediumint' : 'int';
         }
 
@@ -148,8 +195,7 @@ class ARC2_Store extends ARC2_Class
         $var_name = 'has_hash_column_'.$tbl;
         if (!isset($this->$var_name)) {
             $tbl = $this->getTablePrefix().$tbl;
-            $rs = $this->queryDB('SHOW COLUMNS FROM '.$tbl.' LIKE "val_hash"', $this->getDBCon());
-            $this->$var_name = ($rs && mysqli_fetch_array($rs));
+            $this->$var_name = $this->adapter->fetchAssoc('SHOW COLUMNS FROM '.$tbl.' LIKE "val_hash"');
         }
 
         return $this->$var_name;
@@ -160,8 +206,8 @@ class ARC2_Store extends ARC2_Class
         if (!isset($this->has_fulltext_index)) {
             $this->has_fulltext_index = 0;
             $tbl = $this->getTablePrefix().'o2val';
-            $rs = $this->queryDB('SHOW INDEX FROM '.$tbl, $this->getDBCon());
-            while ($row = mysqli_fetch_array($rs)) {
+            $rows = $this->adapter->fetchAssoc('SHOW INDEX FROM '.$tbl);
+            foreach ($rows as $row) {
                 if ('val' != $row['Column_name']) {
                     continue;
                 }
@@ -182,7 +228,7 @@ class ARC2_Store extends ARC2_Class
             return 1;
         }
         $tbl = $this->getTablePrefix().'o2val';
-        $this->queryDB('CREATE FULLTEXT INDEX vft ON '.$tbl.'(val(128))', $this->getDBCon(), 1);
+        $this->adapter->query('CREATE FULLTEXT INDEX vft ON '.$tbl.'(val(128))', 1);
     }
 
     public function disableFulltextSearch()
@@ -191,12 +237,12 @@ class ARC2_Store extends ARC2_Class
             return 1;
         }
         $tbl = $this->getTablePrefix().'o2val';
-        $this->queryDB('DROP INDEX vft ON '.$tbl, $this->getDBCon());
+        $this->adapter->query('DROP INDEX vft ON '.$tbl);
     }
 
     public function countDBProcesses()
     {
-        return ($rs = $this->queryDB('SHOW PROCESSLIST', $this->getDBCon())) ? mysqli_num_rows($rs) : 0;
+        return $this->adapter->getNumberOfRows('SHOW PROCESSLIST');
     }
 
     /**
@@ -211,9 +257,9 @@ class ARC2_Store extends ARC2_Class
         if (preg_match('/\?.+ WHERE/i', $needle, $m)) {
             $needle = $this->query($needle, 'sql');
         }
-        $rs = $this->queryDB('SHOW FULL PROCESSLIST', $dbcon);
         $ref_tbl = $this->getTablePrefix().'triple';
-        while ($row = mysqli_fetch_array($rs)) {
+        $rows = $this->adapter->fetchAssoc('SHOW FULL PROCESSLIST');
+        foreach ($rows as $row) {
             if ($row['Time'] < $runtime) {
                 continue;
             }
@@ -233,7 +279,7 @@ class ARC2_Store extends ARC2_Class
             if (!$kill) {
                 continue;
             }
-            $this->queryDB('KILL '.$row['Id'], $dbcon);
+            $this->adapter->query('KILL '.$row['Id']);
         }
     }
 
@@ -247,7 +293,7 @@ class ARC2_Store extends ARC2_Class
         if (($con = $this->getDBCon())) {
             $tbl = $this->getTablePrefix().'setting';
 
-            return $this->queryDB('SELECT 1 FROM '.$tbl.' LIMIT 0', $con) ? 1 : 0;
+            return $this->adapter->query('SELECT 1 FROM '.$tbl.' LIMIT 0') ? 1 : 0;
         }
     }
 
@@ -282,18 +328,17 @@ class ARC2_Store extends ARC2_Class
     public function hasSetting($k)
     {
         $tbl = $this->getTablePrefix().'setting';
-        $sql = 'SELECT val FROM '.$tbl." WHERE k = '".md5($k)."'";
-        $rs = $this->queryDB($sql, $this->getDBCon());
+        $row = $this->adapter->fetchRow('SELECT val FROM '.$tbl." WHERE k = '".md5($k)."'");
 
-        return ($rs && ($row = mysqli_fetch_array($rs))) ? 1 : 0;
+        return 0 < count($row) ? 1 : 0;
     }
 
     public function getSetting($k, $default = 0)
     {
         $tbl = $this->getTablePrefix().'setting';
-        $sql = 'SELECT val FROM '.$tbl." WHERE k = '".md5($k)."'";
-        $rs = $this->queryDB($sql, $this->getDBCon());
-        if ($rs && ($row = mysqli_fetch_array($rs))) {
+        $row = $this->adapter->fetchRow('SELECT val FROM '.$tbl." WHERE k = '".md5($k)."'");
+
+        if (isset($row['val'])) {
             return unserialize($row['val']);
         }
 
@@ -305,19 +350,21 @@ class ARC2_Store extends ARC2_Class
         $con = $this->getDBCon();
         $tbl = $this->getTablePrefix().'setting';
         if ($this->hasSetting($k)) {
-            $sql = 'UPDATE '.$tbl." SET val = '".mysqli_real_escape_string($con, serialize($v))."' WHERE k = '".md5($k)."'";
+            $sql = 'UPDATE '.$tbl." SET val = '".$this->adapter->escapeVariable(serialize($v))
+                ."' WHERE k = '".md5($k)."'";
         } else {
-            $sql = 'INSERT INTO '.$tbl." (k, val) VALUES ('".md5($k)."', '".mysqli_real_escape_string($con, serialize($v))."')";
+            $sql = 'INSERT INTO '.$tbl." (k, val) VALUES ('".md5($k)
+                ."', '".$this->adapter->escapeVariable(serialize($v))."')";
         }
 
-        return $this->queryDB($sql, $con);
+        return $this->adapter->query($sql);
     }
 
     public function removeSetting($k)
     {
         $tbl = $this->getTablePrefix().'setting';
 
-        return $this->queryDB('DELETE FROM '.$tbl." WHERE k = '".md5($k)."'", $this->getDBCon());
+        return $this->adapter->query('DELETE FROM '.$tbl." WHERE k = '".md5($k)."'");
     }
 
     public function getQueueTicket()
@@ -328,12 +375,12 @@ class ARC2_Store extends ARC2_Class
         $t = 'ticket_'.substr(md5(uniqid(rand())), 0, 10);
         $con = $this->getDBCon();
         /* lock */
-        $rs = $this->queryDB('LOCK TABLES '.$this->getTablePrefix().'setting WRITE', $con);
+        $rs = $this->adapter->query('LOCK TABLES '.$this->getTablePrefix().'setting WRITE');
         /* queue */
         $queue = $this->getSetting('query_queue', []);
         $queue[] = $t;
         $this->setSetting('query_queue', $queue);
-        $this->queryDB('UNLOCK TABLES', $con);
+        $this->adapter->query('UNLOCK TABLES');
         /* loop */
         $lc = 0;
         $queue = $this->getSetting('query_queue', []);
@@ -358,13 +405,13 @@ class ARC2_Store extends ARC2_Class
         }
         $con = $this->getDBCon();
         /* lock */
-        $this->queryDB('LOCK TABLES '.$this->getTablePrefix().'setting WRITE', $con);
+        $this->adapter->query('LOCK TABLES '.$this->getTablePrefix().'setting WRITE');
         /* queue */
         $vals = $this->getSetting('query_queue', []);
         $pos = array_search($t, $vals);
         $queue = ($pos < (count($vals) - 1)) ? array_slice($vals, $pos + 1) : [];
         $this->setSetting('query_queue', $queue);
-        $this->queryDB('UNLOCK TABLES', $con);
+        $this->adapter->query('UNLOCK TABLES');
     }
 
     public function reset($keep_settings = 0)
@@ -376,7 +423,7 @@ class ARC2_Store extends ARC2_Class
         $ps = $this->getSetting('split_predicates', []);
         foreach ($ps as $p) {
             $tbl = 'triple_'.abs(crc32($p));
-            $this->queryDB('DROP TABLE '.$prefix.$tbl, $con);
+            $this->adapter->query('DROP TABLE '.$prefix.$tbl);
         }
         $this->removeSetting('split_predicates');
         /* truncate tables */
@@ -384,7 +431,7 @@ class ARC2_Store extends ARC2_Class
             if ($keep_settings && ('setting' == $tbl)) {
                 continue;
             }
-            $this->queryDB('TRUNCATE '.$prefix.$tbl, $con);
+            $this->adapter->query('TRUNCATE '.$prefix.$tbl);
         }
     }
 
@@ -394,7 +441,7 @@ class ARC2_Store extends ARC2_Class
         $tbls = $this->getTables();
         $prefix = $this->getTablePrefix();
         foreach ($tbls as $tbl) {
-            $this->queryDB('DROP TABLE '.$prefix.$tbl, $con);
+            $this->adapter->query('DROP TABLE '.$prefix.$tbl);
         }
     }
 
@@ -451,10 +498,9 @@ class ARC2_Store extends ARC2_Class
         $new_prefix .= $new_prefix ? '_' : '';
         $new_prefix .= $name.'_';
         foreach ($tbls as $tbl) {
-            $rs = $this->queryDB('RENAME TABLE '.$old_prefix.$tbl.' TO '.$new_prefix.$tbl, $con);
-            $err = mysqli_error($con);
-            if (!empty($err)) {
-                return $this->addError($err);
+            $this->adapter->query('RENAME TABLE '.$old_prefix.$tbl.' TO '.$new_prefix.$tbl);
+            if (null != $this->adapter->getErrorMsg()) {
+                return $this->addError($this->adapter->getErrorMsg());
             }
         }
         $this->a['store_name'] = $name;
@@ -472,10 +518,9 @@ class ARC2_Store extends ARC2_Class
         $old_prefix = $this->getTablePrefix();
         $new_prefix = $new_store->getTablePrefix();
         foreach ($tbls as $tbl) {
-            $rs = $this->queryDB('INSERT IGNORE INTO '.$new_prefix.$tbl.' SELECT * FROM '.$old_prefix.$tbl, $con);
-            $err = mysqli_error($con);
-            if (!empty($err)) {
-                return $this->addError($err);
+            $rs = $this->adapter->query('INSERT IGNORE INTO '.$new_prefix.$tbl.' SELECT * FROM '.$old_prefix.$tbl);
+            if (null != $this->adapter->getErrorMsg()) {
+                return $this->addError($this->adapter->getErrorMsg());
             }
         }
 
@@ -607,14 +652,21 @@ class ARC2_Store extends ARC2_Class
         $r = 0;
         /* via hash */
         if (preg_match('/^(s2val|o2val)$/', $tbl) && $this->hasHashColumn($tbl)) {
-            $sql = 'SELECT id, val FROM '.$this->getTablePrefix().$tbl." WHERE val_hash = '".$this->getValueHash($val)."' ORDER BY id";
-            $rs = $this->queryDB($sql, $con);
-            if (!$rs || !mysqli_num_rows($rs)) {// try 32 bit version
-                $sql = 'SELECT id, val FROM '.$this->getTablePrefix().$tbl." WHERE val_hash = '".$this->getValueHash($val, true)."' ORDER BY id";
-                $rs = $this->queryDB($sql, $con);
+            $sql = 'SELECT id, val
+                      FROM '.$this->getTablePrefix().$tbl."
+                     WHERE val_hash = '".$this->getValueHash($val)."'
+                     ORDER BY id";
+            $rs = $this->adapter->query($sql);
+            if (!$rs || 0 == $this->adapter->getNumberOfRows($sql)) {// try 32 bit version
+                $sql = 'SELECT id, val
+                          FROM '.$this->getTablePrefix().$tbl."
+                         WHERE val_hash = '".$this->getValueHash($val, true)."'
+                         ORDER BY id";
+                $rs = $this->adapter->query($sql);
             }
-            if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs)) {
-                while ($row = mysqli_fetch_array($rs)) {
+            $rows = $this->adapter->fetchAssoc($sql);
+            if (is_array($rows)) {
+                foreach ($rows as $row) {
                     if ($row['val'] == $val) {
                         $r = $row['id'];
                         break;
@@ -624,8 +676,12 @@ class ARC2_Store extends ARC2_Class
         }
         /* exact match */
         else {
-            $sql = 'SELECT id FROM '.$this->getTablePrefix().$tbl." WHERE val = BINARY '".mysqli_real_escape_string($con, $val)."' LIMIT 1";
-            if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs) && ($row = mysqli_fetch_array($rs))) {
+            $sql = 'SELECT id
+                      FROM '.$this->getTablePrefix().$tbl."
+                     WHERE val = BINARY '".$this->adapter->escapeVariable($val)."'
+                     LIMIT 1";
+            $row = $this->adapter->fetchRow($sql);
+            if (isset($row['id'])) {
                 $r = $row['id'];
             }
         }
@@ -639,9 +695,12 @@ class ARC2_Store extends ARC2_Class
     public function getIDValue($id, $term = '')
     {
         $tbl = preg_match('/^(s|o)$/', $term) ? $term.'2val' : 'id2val';
-        $con = $this->getDBCon();
-        $sql = 'SELECT val FROM '.$this->getTablePrefix().$tbl.' WHERE id = '.mysqli_real_escape_string($con, $id).' LIMIT 1';
-        if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs) && ($row = mysqli_fetch_array($rs))) {
+        $sql = 'SELECT val
+                  FROM '.$this->getTablePrefix().$tbl.'
+                 WHERE id = '.$this->adapter->escapeVariable($id).'
+                 LIMIT 1';
+        $row = $this->adapter->fetchRow($sql);
+        if (isset($row['val'])) {
             return $row['val'];
         }
 
@@ -655,20 +714,16 @@ class ARC2_Store extends ARC2_Class
         }
         $con = $this->getDBCon();
         $l_name = $this->a['db_name'].'.'.$this->getTablePrefix().'.write_lock';
-        $rs = $this->queryDB('SELECT IS_FREE_LOCK("'.$l_name.'") AS success', $con);
-        if ($rs) {
-            $row = mysqli_fetch_array($rs);
+        $row = $this->adapter->fetchRow('SELECT IS_FREE_LOCK("'.$l_name.'") AS success');
+        if ($row) {
             if (!$row['success']) {
                 if ($t_out) {
                     sleep(1);
-
                     return $this->getLock($t_out - 1, $t_out_init);
                 }
             } else {
-                $rs = $this->queryDB('SELECT GET_LOCK("'.$l_name.'", '.$t_out_init.') AS success', $con);
-                if ($rs) {
-                    $row = mysqli_fetch_array($rs);
-
+                $row = $this->adapter->fetchRow('SELECT GET_LOCK("'.$l_name.'", '.$t_out_init.') AS success');
+                if (isset($row['success'])) {
                     return $row['success'];
                 }
             }
@@ -679,14 +734,13 @@ class ARC2_Store extends ARC2_Class
 
     public function releaseLock()
     {
-        $con = $this->getDBCon();
-
-        return $this->queryDB('DO RELEASE_LOCK("'.$this->a['db_name'].'.'.$this->getTablePrefix().'.write_lock")', $con);
+        return $this->adapter->query(
+            'DO RELEASE_LOCK("'.$this->a['db_name'].'.'.$this->getTablePrefix().'.write_lock")'
+        );
     }
 
     public function processTables($level = 2, $operation = 'optimize')
     {/* 1: triple + g2t, 2: triple + *2val, 3: all tables */
-        $con = $this->getDBCon();
         $pre = $this->getTablePrefix();
         $tbls = $this->getTables();
         $sql = '';
@@ -700,10 +754,9 @@ class ARC2_Store extends ARC2_Class
             $sql .= $sql ? ', ' : strtoupper($operation).' TABLE ';
             $sql .= $pre.$tbl;
         }
-        $this->queryDB($sql, $con);
-        $err = mysqli_error($con);
-        if (!empty($err)) {
-            $this->addError($err.' in '.$sql);
+        $this->adapter->query($sql);
+        if (null !== $this->adapter->getErrorMsg()) {
+            $this->addError($this->adapter->getErrorMsg().' in '.$sql);
         }
     }
 

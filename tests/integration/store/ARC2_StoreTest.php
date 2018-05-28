@@ -11,15 +11,23 @@ class ARC2_StoreTest extends ARC2_TestCase
         parent::setUp();
 
         $this->fixture = \ARC2::getStore($this->dbConfig);
+        $this->fixture->createDBCon();
 
         // remove all tables
-        $res = $this->fixture->queryDB('SHOW TABLES', $this->fixture->getDBCon());
-        while($row = mysqli_fetch_array($res)) {
-            $this->fixture->queryDB('DROP TABLE '. $row[0], $this->fixture->getDBCon());
+        $tables = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        if (is_array($tables)) {
+            foreach($tables as $table) {
+                $this->fixture->getDBAdapter()->query('DROP TABLE '. $table[0]);
+            }
         }
 
         // fresh setup of ARC2
         $this->fixture->setup();
+    }
+
+    public function tearDown()
+    {
+        $this->fixture->closeDBCon();
     }
 
     /**

@@ -9,13 +9,15 @@
  */
 
 class ARC2_Class {
-  
+
+    protected $adapter;
+
   function __construct($a, &$caller) {
     $this->a = is_array($a) ? $a : array();
     $this->caller = $caller;
     $this->__init();
   }
-  
+
   function __init() {/* base, time_limit */
     if (!$_POST && isset($GLOBALS['HTTP_RAW_POST_DATA'])) parse_str($GLOBALS['HTTP_RAW_POST_DATA'], $_POST); /* php5 bug */
     $this->inc_path = ARC2::getIncPath();
@@ -34,7 +36,7 @@ class ARC2_Class {
   }
 
   /*  */
-  
+
   function v($name, $default = false, $o = false) {/* value if set */
     if ($o === false) $o = $this;
     if (is_array($o)) {
@@ -42,7 +44,7 @@ class ARC2_Class {
     }
     return isset($o->$name) ? $o->$name : $default;
   }
-  
+
   function v1($name, $default = false, $o = false) {/* value if 1 (= not empty) */
     if ($o === false) $o = $this;
     if (is_array($o)) {
@@ -50,7 +52,7 @@ class ARC2_Class {
     }
     return (isset($o->$name) && $o->$name) ? $o->$name : $default;
   }
-  
+
   function m($name, $a = false, $default = false, $o = false) {/* call method */
     if ($o === false) $o = $this;
     return method_exists($o, $name) ? $o->$name($a) : $default;
@@ -119,7 +121,7 @@ class ARC2_Class {
   }
 
   /*  */
-  
+
   function addError($v) {
     if (!in_array($v, $this->errors)) {
       $this->errors[] = $v;
@@ -133,11 +135,11 @@ class ARC2_Class {
     }
     return false;
   }
-  
+
   function getErrors() {
     return $this->errors;
   }
-  
+
   function getWarnings() {
     return $this->warnings;
   }
@@ -148,9 +150,9 @@ class ARC2_Class {
       $this->caller->resetErrors();
     }
   }
-  
+
   /*  */
-  
+
   function splitURI($v) {
     return ARC2::splitURI($v);
   }
@@ -198,7 +200,7 @@ class ARC2_Class {
 	 $this->nsp[$ns] = $prefix;
 	 return $this;
   }
-  
+
   function getPrefix($ns) {
     if (!isset($this->nsp[$ns])) {
       $this->ns['ns' . $this->ns_count] = $ns;
@@ -245,7 +247,7 @@ class ARC2_Class {
   }
 
   /*  */
-  
+
   function calcURI($path, $base = "") {
     /* quick check */
     if (preg_match("/^[a-z0-9\_]+\:/i", $path)) {/* abs path or bnode */
@@ -290,9 +292,9 @@ class ARC2_Class {
     }
     return $base . $path;
   }
-  
+
   /*  */
-  
+
   function calcBase($path) {
     $r = $path;
     $r = preg_replace('/\#.*$/', '', $r);/* remove hash */
@@ -319,7 +321,7 @@ class ARC2_Class {
     }
     return $res;
   }
-  
+
   function toIndex($v) {
     if (is_array($v)) {
       if (isset($v[0]) && isset($v[0]['s'])) return ARC2::getSimpleIndex($v, 0);
@@ -358,14 +360,14 @@ class ARC2_Class {
     $ser = new ARC2_NTriplesSerializer(array_merge($this->a, array('ns' => $ns)), $this);
     return (isset($v[0]) && isset($v[0]['s'])) ? $ser->getSerializedTriples($v, $raw) : $ser->getSerializedIndex($v, $raw);
   }
-  
+
   function toTurtle($v, $ns = '', $raw = 0) {
     ARC2::inc('TurtleSerializer');
     if (!$ns) $ns = isset($this->a['ns']) ? $this->a['ns'] : array();
     $ser = new ARC2_TurtleSerializer(array_merge($this->a, array('ns' => $ns)), $this);
     return (isset($v[0]) && isset($v[0]['s'])) ? $ser->getSerializedTriples($v, $raw) : $ser->getSerializedIndex($v, $raw);
   }
-  
+
   function toRDFXML($v, $ns = '', $raw = 0) {
     ARC2::inc('RDFXMLSerializer');
     if (!$ns) $ns = isset($this->a['ns']) ? $this->a['ns'] : array();
@@ -424,7 +426,7 @@ class ARC2_Class {
     $parser->parse($g, $this->getTurtleHead() . $t);
     return $parser->getSimpleIndex(0, $vals);
   }
-  
+
   function getTurtleHead() {
     $r = '';
     $ns = $this->v('ns', array(), $this->a);
@@ -433,7 +435,7 @@ class ARC2_Class {
     }
     return $r;
   }
-  
+
   function completeQuery($q, $ns = '') {
     if (!$ns) $ns = isset($this->a['ns']) ? $this->a['ns'] : array();
     $added_prefixes = array();
@@ -468,7 +470,7 @@ class ARC2_Class {
   function checkRegex($str) {
     return addslashes($str); // @@todo extend
   }
-  
+
   /* Microdata methods */
 
   function getMicrodataAttrs($id, $type = '') {
@@ -482,23 +484,44 @@ class ARC2_Class {
 
   /* central DB query hook */
 
-  function queryDB($sql, $con, $log_errors = 0) {
-    $t1 = ARC2::mtime();
-    $r = mysqli_query( $con, $sql);
-    if (0) {
-      $t2 = ARC2::mtime() - $t1;
-      $call_obj = $this;
-      $call_path = '';
-      while ($call_obj) {
-        $call_path = get_class($call_obj) . ' / ' . $call_path;
-        $call_obj = isset($call_obj->caller) ? $call_obj->caller : false;
-      }
-      echo "\n" . $call_path . " needed " . $t2 . ' secs for ' . str_replace("\n" , ' ', $sql);;
+    /**
+     * @param string $sql SQL query
+     * @param mysqli $con Connection reference.
+     * @param int $log_errors Default is 0, so no errors are logged. Use 1 if you want.
+     */
+    function queryDB($sql, $con, $log_errors = 0)
+    {
+        // adapter provides functions to interact with the database system
+        if (null == $this->adapter) {
+            // TODO remove that when using namespaces
+            if (!class_exists("\ARC2\Store\Adapter\mysqliAdapter")) {
+                require __DIR__.'/src/ARC2/Store/Adapter/mysqliAdapter.php';
+            }
+            $this->adapter = new \ARC2\Store\Adapter\mysqliAdapter();
+            $this->adapter->connect($con);
+        }
+
+        $t1 = ARC2::mtime();
+        $r = $this->adapter->query($sql);
+
+        // TODO this will not called, ever. it seems this has to be called only under certain circumstances.
+        if (0) {
+            $t2 = ARC2::mtime() - $t1;
+            $call_obj = $this;
+            $call_path = '';
+            while ($call_obj) {
+                $call_path = get_class($call_obj) . ' / ' . $call_path;
+                $call_obj = isset($call_obj->caller) ? $call_obj->caller : false;
+            }
+            echo "\n" . $call_path . " needed " . $t2 . ' secs for ' . str_replace("\n" , ' ', $sql);;
+        }
+
+        if ($log_errors && null != mysqli_connect_error($con)) {
+            $this->addError($this->adapter->getErrorMsg());
+        }
+
+        return $r;
     }
-    $er = mysqli_error($con);
-    if ($log_errors && !empty($er)) $this->addError($er);
-    return $r;
-  }
 
   /**
    * Shortcut method to create an RDF/XML backup dump from an RDF Store object.
