@@ -330,7 +330,7 @@ class ARC2_Store extends ARC2_Class
         $tbl = $this->getTablePrefix().'setting';
         $row = $this->adapter->fetchRow('SELECT val FROM '.$tbl." WHERE k = '".md5($k)."'");
 
-        return 0 < count($row) ? 1 : 0;
+        return is_array($row) ? 1 : 0;
     }
 
     public function getSetting($k, $default = 0)
