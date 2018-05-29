@@ -36,6 +36,8 @@ abstract class AbstractAdapter
 
     abstract public function fetchRow($sql);
 
+    abstract public function getCollation();
+
     abstract public function getConnectionId();
 
     abstract public function getDBSName();
@@ -48,5 +50,9 @@ abstract class AbstractAdapter
 
     abstract public function getNumberOfRows($sql);
 
-    abstract public function query($sql, $resultmode = null);
+    abstract public function getStoreName();
+
+    abstract public function getTablePrefix();
+
+    abstract public function query($sql);
 }

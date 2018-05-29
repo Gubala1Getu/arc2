@@ -18,24 +18,30 @@ abstract class AbstractARC2_StoreTest extends ARC2_TestCase
      * @return array simple array of key-value-pairs, which consists of graph URIs as key and NamedNode
      *               instance as value
      */
-    protected function getGraphs($prefix = 'arc')
+    protected function getGraphs($prefix = null)
     {
-        $g2t = $prefix.'_g2t';
-        $id2val = $prefix.'_id2val';
+        if (null == $prefix) {
+            $prefix = $this->fixture->getTablePrefix();
+        }
+
+        $g2t = $prefix.'g2t';
+        $id2val = $prefix.'id2val';
 
         // collects all values which have an ID (column g) in the g2t table.
         $query = 'SELECT id2val.val AS graphUri
-            FROM '.$g2t.' g2t
-            LEFT JOIN '.$id2val.' id2val ON g2t.g = id2val.id
-            GROUP BY g';
+                    FROM '.$g2t.' g2t
+                         LEFT JOIN '.$id2val.' id2val ON g2t.g = id2val.id
+                   GROUP BY g';
 
         // send SQL query
-        $result = $this->fixture->queryDB($query, $this->fixture->getDBCon());
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc($query);
         $graphs = [];
 
         // collect graph URI's
-        while ($row = $result->fetch_assoc()) {
-            $graphs[] = $row['graphUri'];
+        if (is_array($rows)) {
+            foreach($rows as $row) {
+                $graphs[] = $row['graphUri'];
+            }
         }
 
         return $graphs;
@@ -146,18 +152,19 @@ XML;
 
     public function testCreateDBConDatabaseNotAvailable()
     {
+        // remove db first, to provoke the fixture to create it again
         $this->fixture->queryDB('DROP DATABASE '.$this->fixture->a['db_name'], $this->fixture->getDBCon());
-        $databases = $this->fixture->queryDB('SHOW DATABASES', $this->fixture->getDBCon());
-        while($row = mysqli_fetch_array($databases)) {
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW DATABASES');
+        foreach ($rows as $row) {
             $this->assertFalse($this->fixture->a['db_name'] == $row[0]);
         }
 
         // create connection, which also creates the DB
         $this->fixture->createDBCon();
 
-        $databases = $this->fixture->queryDB('SHOW DATABASES', $this->fixture->getDBCon());
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW DATABASES');
         $foundDb = false;
-        while($row = mysqli_fetch_array($databases)) {
+        foreach ($rows as $row) {
             if ($this->fixture->a['db_name'] == $row[0]) {
                 $foundDb = true;
             }
@@ -208,16 +215,15 @@ XML;
     {
         // make sure all tables were created
         $this->fixture->setup();
-        $tables = $this->fixture->getTables();
-        $res = $this->fixture->queryDB('SHOW TABLES;', $this->fixture->getDBCon());
-        $this->assertEquals(6, $res->num_rows);
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        $this->assertEquals(6, count($rows));
 
         // remove all tables
         $this->fixture->drop();
 
         // check that all tables were removed
-        $res = $this->fixture->queryDB('SHOW TABLES;', $this->fixture->getDBCon());
-        $this->assertEquals(0, $res->num_rows);
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        $this->assertFalse($rows);
     }
 
     /*
@@ -489,18 +495,18 @@ XML;
         /*
          * remove all tables
          */
-        $res = $this->fixture->queryDB('SHOW TABLES', $this->fixture->getDBCon());
-        while($row = mysqli_fetch_array($res)) {
-            $this->fixture->queryDB('DROP TABLE '. $row[0], $this->fixture->getDBCon());
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        foreach ($rows as $row) {
+            $this->fixture->getDBAdapter()->query('DROP TABLE '. $row[0]);
         }
 
         /*
          * create fresh store and check tables
          */
         $this->fixture->setup();
-        $res = $this->fixture->queryDB('SHOW TABLES', $this->fixture->getDBCon());
-        while($row = mysqli_fetch_array($res)) {
-            $this->assertEquals(substr($row[0], 0, 4), 'arc_');
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        foreach ($rows as $row) {
+            $this->assertTrue(false !== strpos($row[0], $this->dbConfig['db_table_prefix']));
         }
 
         /*
@@ -512,9 +518,9 @@ XML;
         /*
          * check for new prefixes
          */
-        $res = $this->fixture->queryDB('SHOW TABLES', $this->fixture->getDBCon());
-        while($row = mysqli_fetch_array($res)) {
-            $this->assertEquals(substr($row[0], 0, 7), $prefix);
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
+        foreach ($rows as $row) {
+            $this->assertTrue(false !== strpos($row[0], 'renamed'));
         }
     }
 
@@ -595,12 +601,12 @@ XML;
         /*
          * check for new prefixes
          */
-        $res = $this->fixture->queryDB('SHOW TABLES', $this->fixture->getDBCon());
+        $rows = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
         $foundArcPrefix = $foundReplicatePrefix = false;
-        while($row = mysqli_fetch_array($res)) {
-            if ('arc_' == substr($row[0], 0, 4)) {
+        foreach ($rows as $row) {
+            if (false !== strpos($row[0], $this->dbConfig['store_name'])) {
                 $foundArcPrefix = true;
-            } elseif ('replicate' == substr($row[0], 0, 9)) {
+            } elseif (false !== strpos($row[0], 'replicate')) {
                 $foundReplicatePrefix = true;
             }
         }

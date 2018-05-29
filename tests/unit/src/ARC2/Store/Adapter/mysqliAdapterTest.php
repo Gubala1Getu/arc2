@@ -41,7 +41,7 @@ class mysqliAdapterTest extends ARC2_TestCase
         $this->fixture->connect();
 
         $result = $this->fixture->query('SHOW TABLES');
-        $this->assertTrue(is_object($result));
+        $this->assertTrue($result);
     }
 
     public function testConnectUseGivenConnection()
@@ -66,7 +66,7 @@ class mysqliAdapterTest extends ARC2_TestCase
 
         // simple test query to check that its working
         $result = $this->fixture->query('SHOW TABLES');
-        $this->assertTrue(is_object($result));
+        $this->assertTrue($result);
     }
 
     /*
@@ -132,11 +132,9 @@ class mysqliAdapterTest extends ARC2_TestCase
     public function testQuery()
     {
         // valid query
-        $result = $this->fixture->query('SHOW TABLES');
-        $this->assertTrue(is_object($result));
+        $this->assertTrue($this->fixture->query('SHOW TABLES'));
 
         // invalid query
-        $result = $this->fixture->query('invalid query');
-        $this->assertFalse($result);
+        $this->assertFalse($this->fixture->query('invalid query'));
     }
 }

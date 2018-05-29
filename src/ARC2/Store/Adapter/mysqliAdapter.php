@@ -20,9 +20,13 @@ class mysqliAdapter extends AbstractAdapter
         }
     }
 
+    /**
+     * Connect to server or storing a given connection.
+     */
     public function connect($existingConnection = null)
     {
-        // reuse a given existing connection
+        // reuse a given existing connection.
+        // it assumes that $existingConnection is a mysqli connection object
         if (null !== $existingConnection) {
             $this->connection = $existingConnection;
 
@@ -31,10 +35,43 @@ class mysqliAdapter extends AbstractAdapter
             $this->connection = mysqli_connect(
                 $this->configuration['db_host'],
                 $this->configuration['db_user'],
-                $this->configuration['db_pwd'],
-                $this->configuration['db_name']
+                $this->configuration['db_pwd']
             );
         }
+
+        // try to use given database. if it doesn't exist, try to create it
+        if (isset($this->configuration['db_name'])
+            && false === $this->query('USE `'.$this->configuration['db_name'].'`')) {
+            $dbCreated = false;
+            // try to create it
+            if (isset($this->configuration['db_name']) && 0 < strlen($this->configuration['db_name'])) {
+                $result = $this->query('
+                    CREATE DATABASE IF NOT EXISTS `'.$this->configuration['db_name'].'`
+                    DEFAULT CHARACTER SET utf8
+                    DEFAULT COLLATE utf8_general_ci'
+                );
+
+                if ($result && $this->query('USE `'.$this->configuration['db_name'].'`')) {
+                    $this->query("SET NAMES 'utf8'");
+                    $dbCreated = true;
+                }
+            }
+            // if db was not created, stop here and return string, which lead ARC2_Store to stop
+            // and store given string was error message.
+            if (false == $dbCreated) {
+                return 'Database '.$this->configuration['db_name'].' not available. Creating it also failed.';
+            }
+        }
+
+        // set names to UTF-8
+        if (preg_match('/^utf8/', $this->getCollation())) {
+            $this->query("SET NAMES 'utf8'");
+        }
+
+        // This is RDF, we may need many JOINs...
+        // TODO find an equivalent in other DBS
+        $this->query('SET SESSION SQL_BIG_SELECTS=1');
+
         return $this->connection;
     }
 
@@ -56,8 +93,10 @@ class mysqliAdapter extends AbstractAdapter
 
         $rows = array();
 
-        while($row = $result->fetch_array()) {
-            $rows[] = $row;
+        if (false != $result) {
+            while($row = $result->fetch_array()) {
+                $rows[] = $row;
+            }
         }
 
         return 0 < count($rows) ? $rows : false;
@@ -67,7 +106,22 @@ class mysqliAdapter extends AbstractAdapter
     {
         $result = mysqli_query($this->connection, $sql);
 
-        return $result->fetch_array();
+        if (false !== $result) {
+            return $result->fetch_array();
+        } else {
+            return false;
+        }
+    }
+
+    public function getCollation()
+    {
+        $row = $this->fetchRow('SHOW TABLE STATUS LIKE "'.$this->getTablePrefix().'setting"');
+
+        if (isset($row['Collation'])) {
+            return $row['Collation'];
+        } else {
+            return '';
+        }
     }
 
     public function getConnectionId()
@@ -105,19 +159,42 @@ class mysqliAdapter extends AbstractAdapter
 
     public function getNumberOfRows($sql)
     {
-        $result = $this->query($sql);
+        $result = mysqli_query($this->connection, $sql);
         if ($result) {
             return mysqli_num_rows($result);
         }
         return 0;
     }
 
-    public function query($sql, $resultmode = null)
+    public function getStoreName()
     {
-        if (null == $resultmode) {
-            $resultmode = \MYSQLI_STORE_RESULT;
+        if (isset($this->configuration['store_name'])) {
+            return $this->configuration['store_name'];
         }
 
-        return mysqli_query($this->connection, $sql, $resultmode);
+        return 'arc';
+    }
+
+    public function getTablePrefix()
+    {
+        $prefix = '';
+        if (isset($this->configuration['db_table_prefix'])) {
+            $prefix = $this->configuration['db_table_prefix'].'_';
+        }
+
+        $prefix .= $this->getStoreName().'_';
+        return $prefix;
+    }
+
+    /**
+     * @param string $sql Query
+     *
+     * @return bool True if query ran fine, false otherwise.
+     */
+    public function query($sql)
+    {
+        return mysqli_query($this->connection, $sql)
+            ? true
+            : false;
     }
 }

@@ -16,6 +16,55 @@ class ARC2_Store extends ARC2_Class
     {
         parent::__construct($a, $caller);
 
+        $this->getDBAdapter();
+    }
+
+    public function __init()
+    {/* db_con */
+        parent::__init();
+        $this->table_lock = 0;
+        $this->triggers = $this->v('store_triggers', [], $this->a);
+        $this->queue_queries = $this->v('store_queue_queries', 0, $this->a);
+        $this->is_win = ('win' == strtolower(substr(PHP_OS, 0, 3))) ? true : false;
+        $this->max_split_tables = $this->v('store_max_split_tables', 10, $this->a);
+        $this->split_predicates = $this->v('store_split_predicates', [], $this->a);
+    }
+
+    public function getName()
+    {
+        return $this->adapter->getStoreName();
+    }
+
+    public function getTablePrefix()
+    {
+        $this->tbl_prefix = $this->adapter->getTablePrefix();
+        return $this->tbl_prefix;
+    }
+
+    public function createDBCon()
+    {
+        foreach (['db_host' => 'localhost', 'db_user' => '', 'db_pwd' => '', 'db_name' => ''] as $k => $v) {
+            $this->a[$k] = $this->v($k, $v, $this->a);
+        }
+
+        // try to connect
+        $return = $this->adapter->connect();
+
+        // $return is a string, if there was an error
+        if (is_string($return)) {
+            return $this->addError($return);
+
+        // otherwise its an valid connection
+        // store it only, if adapter is of type mysqli. reason is, in the future the db adapter
+        // has to be as lose coupled as possible to avoid users directly interacting with the db
+        } elseif ('mysqli' == $this->a['db_adapter']) {
+            $this->a['db_con'] = $return;
+            return true;
+        }
+    }
+
+    public function getDBAdapter($con = null)
+    {
         // adapter provides functions to interact with the database system
         if (null == $this->adapter) {
             // TODO remove that when using namespaces
@@ -32,85 +81,7 @@ class ARC2_Store extends ARC2_Class
             $fac = new \ARC2\Store\Adapter\AdapterFactory();
             $this->adapter = $fac->getInstanceFor($this->a['db_adapter'], $this->a);
         }
-    }
 
-    public function __init()
-    {/* db_con */
-        parent::__init();
-        $this->table_lock = 0;
-        $this->triggers = $this->v('store_triggers', [], $this->a);
-        $this->queue_queries = $this->v('store_queue_queries', 0, $this->a);
-        $this->is_win = ('win' == strtolower(substr(PHP_OS, 0, 3))) ? true : false;
-        $this->max_split_tables = $this->v('store_max_split_tables', 10, $this->a);
-        $this->split_predicates = $this->v('store_split_predicates', [], $this->a);
-    }
-
-    public function getName()
-    {
-        return $this->v('store_name', 'arc', $this->a);
-    }
-
-    public function getTablePrefix()
-    {
-        if (!isset($this->tbl_prefix)) {
-            $r = $this->v('db_table_prefix', '', $this->a);
-            $r .= $r ? '_' : '';
-            $r .= $this->getName().'_';
-            $this->tbl_prefix = $r;
-        }
-
-        return $this->tbl_prefix;
-    }
-
-    public function createDBCon()
-    {
-        foreach (['db_host' => 'localhost', 'db_user' => '', 'db_pwd' => '', 'db_name' => ''] as $k => $v) {
-            $this->a[$k] = $this->v($k, $v, $this->a);
-        }
-
-        // try to connect
-        $db_con = $this->adapter->connect();
-        if (!$db_con) {
-            return $this->addError($this->adapter->getErrorMsg());
-        }
-
-        $this->a['db_con'] = $db_con;
-
-        // try to use given database. if it doesn't exist, try to create it
-        if (!$this->adapter->query('USE `'.$this->a['db_name'].'`')) {
-            $fixed = 0;
-            /* try to create it */
-            if ($this->a['db_name']) {
-                $this->adapter->query('
-                  CREATE DATABASE IF NOT EXISTS `'.$this->a['db_name'].'`
-                  DEFAULT CHARACTER SET utf8
-                  DEFAULT COLLATE utf8_general_ci
-                  ', 1
-                );
-                if ($this->adapter->query('USE `'.$this->a['db_name'].'`')) {
-                    $this->adapter->query("SET NAMES 'utf8'");
-                    $fixed = 1;
-                }
-            }
-            if (!$fixed) {
-                return $this->addError($this->adapter->getErrorMsg());
-            }
-        }
-
-        // set names to UTF-8
-        if (preg_match('/^utf8/', $this->getCollation())) {
-            $this->adapter->query("SET NAMES 'utf8'");
-        }
-
-        // This is RDF, we may need many JOINs...
-        // TODO find an equivalent in other DBS
-        $this->adapter->query('SET SESSION SQL_BIG_SELECTS=1');
-
-        return true;
-    }
-
-    public function getDBAdapter()
-    {
         return $this->adapter;
     }
 
@@ -171,13 +142,7 @@ class ARC2_Store extends ARC2_Class
 
     public function getCollation()
     {
-        $row = $this->adapter->fetchRow('SHOW TABLE STATUS LIKE "'.$this->getTablePrefix().'setting"');
-
-        if (isset($row['Collation'])) {
-            return $row['Collation'];
-        } else {
-            return '';
-        }
+        return $this->adapter->getCollation($this->getTablePrefix());
     }
 
     public function getColumnType()
@@ -291,7 +256,7 @@ class ARC2_Store extends ARC2_Class
 
     public function getTables()
     {
-        return ['triple', 'g2t', 'id2val', 's2val', 'o2val', 'setting'];
+        return array('triple', 'g2t', 'id2val', 's2val', 'o2val', 'setting');
     }
 
     public function isSetUp()
@@ -515,16 +480,20 @@ class ARC2_Store extends ARC2_Class
 
     public function replicateTo($name)
     {
-        $conf = array_merge($this->a, ['store_name' => $name]);
-        $new_store = ARC2::getStore($conf);
+        // prepare new store
+        $newConf = $this->a;
+        $newConf['store_name'] = $name;
+        $new_store = ARC2::getStore($newConf);
         $new_store->setUp();
         $new_store->reset();
+        $new_prefix = $new_store->getTablePrefix();
+
         $con = $this->getDBCon();
         $tbls = $this->getTables();
         $old_prefix = $this->getTablePrefix();
-        $new_prefix = $new_store->getTablePrefix();
+
         foreach ($tbls as $tbl) {
-            $rs = $this->adapter->query('INSERT IGNORE INTO '.$new_prefix.$tbl.' SELECT * FROM '.$old_prefix.$tbl);
+            $this->adapter->query('INSERT IGNORE INTO '.$new_prefix.$tbl.' SELECT * FROM '.$old_prefix.$tbl);
             if (null != $this->adapter->getErrorMsg()) {
                 return $this->addError($this->adapter->getErrorMsg());
             }

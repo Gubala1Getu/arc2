@@ -43,3 +43,21 @@ composer require semsol/arc2:2.4.*
 ## RDF triple store
 
 Please have a look into [SPARQL-support.md](SPARQL-support.md) to see which SPARQL 1.0/1.1 features are currently supported.
+
+## Internals
+
+Using an database adapter allows you to switch between different backends. Currently available are mysqli (default) and pdo.
+To maintain backward compatibility, all adapters behave like the previous mysqli implementation (ARC2 2.3.x and ealier). This
+may be subject for further changes.
+
+In general, which the database adapter is not your concern. But you can select it by adding the following key-value-pair to the database
+credentials array:
+
+```php
+$dbConfig = [
+    // ...
+    'db_adapter' => 'mysqli'
+];
+```
+
+In case you want to work with the adapters directly, please have a look into the function heads.

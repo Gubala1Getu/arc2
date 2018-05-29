@@ -9,4 +9,6 @@ return array(
     'db_user' => 'root',
     'db_pwd'  => 'Pass123',
     'db_host' => 'localhost',
+    'db_table_prefix' => 'arc2',
+    'db_adapter' => 'mysqli',
 );

@@ -101,11 +101,7 @@ abstract class ComplianceTest extends ARC2_TestCase
      */
     protected function getRowCount($tableName)
     {
-        $result = $this->store->queryDB(
-            'SELECT COUNT(*) as count FROM '. $tableName,
-            $this->store->getDBCon()
-        );
-        $row = $result->fetch_assoc();
+        $row = $this->store->getDBAdapter()->fetchRow('SELECT COUNT(*) as count FROM '. $tableName);
         return $row['count'];
     }
 

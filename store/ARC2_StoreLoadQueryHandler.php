@@ -162,20 +162,21 @@ class ARC2_StoreLoadQueryHandler extends ARC2_StoreQueryHandler
             $sql .= '(SELECT MAX(id) as `id` FROM '.$this->store->getTablePrefix().$tbl.')';
         }
         $r = 0;
-        if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs)) {
-            while ($row = mysqli_fetch_array($rs)) {
+        $rows = $this->getDBAdapter()->fetchAssoc($sql);
+        if (is_array($rows)) {
+            foreach ($rows as $row) {
                 $r = ($r < $row['id']) ? $row['id'] : $r;
             }
         }
 
-        return $r + 1;
+        return ($r+1);
     }
 
     public function getMaxTripleID()
     {
-        $con = $this->store->getDBCon();
         $sql = 'SELECT MAX(t) AS `id` FROM '.$this->store->getTablePrefix().'triple';
-        if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs) && ($row = mysqli_fetch_array($rs))) {
+        $row = $this->getDBAdapter()->fetchRow($sql);
+        if (isset($row['id'])) {
             return $row['id'] + 1;
         }
 
@@ -204,12 +205,12 @@ class ARC2_StoreLoadQueryHandler extends ARC2_StoreQueryHandler
         $sub_tbls = ('id' == $tbl) ? ['id2val', 's2val', 'o2val'] : ('s' == $tbl ? ['s2val', 'id2val', 'o2val'] : ['o2val', 'id2val', 's2val']);
         foreach ($sub_tbls as $sub_tbl) {
             $id = 0;
-            //$sql = "SELECT id AS `id`, '" . $sub_tbl . "' AS `tbl` FROM " . $tbl_prefix . $sub_tbl . " WHERE val = BINARY '" . mysql_real_escape_string($val, $con) . "'";
             /* via hash */
             if (preg_match('/^(s2val|o2val)$/', $sub_tbl) && $this->hasHashColumn($sub_tbl)) {
                 $sql = 'SELECT id AS `id`, val AS `val` FROM '.$tbl_prefix.$sub_tbl." WHERE val_hash = BINARY '".$this->getValueHash($val)."'";
-                if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs)) {
-                    while ($row = mysqli_fetch_array($rs)) {
+                $rows = $this->getDBAdapter()->fetchAssoc($sql);
+                if (is_array($rows)) {
+                    foreach($rows as $row) {
                         if ($row['val'] == $val) {
                             $id = $row['id'];
                             break;
@@ -218,8 +219,8 @@ class ARC2_StoreLoadQueryHandler extends ARC2_StoreQueryHandler
                 }
             } else {
                 $sql = 'SELECT id AS `id` FROM '.$tbl_prefix.$sub_tbl." WHERE val = BINARY '".mysqli_real_escape_string($con, $val)."'";
-                if (($rs = $this->queryDB($sql.' LIMIT 1', $con)) && mysqli_num_rows($rs)) {
-                    $row = mysqli_fetch_array($rs);
+                $row = $this->getDBAdapter()->fetchRow($sql);
+                if (isset($row['id'])) {
                     $id = $row['id'];
                 }
             }
@@ -255,16 +256,24 @@ class ARC2_StoreLoadQueryHandler extends ARC2_StoreQueryHandler
             return [$this->triple_ids[$val]]; /* hack for "don't insert this triple" */
         }
         /* db */
-        $sql = 'SELECT t FROM '.$this->store->getTablePrefix().'triple WHERE
-      s = '.$t['s'].' AND p = '.$t['p'].' AND o = '.$t['o'].' AND o_lang_dt = '.$t['o_lang_dt'].' AND s_type = '.$t['s_type'].' AND o_type = '.$t['o_type'].'
-      LIMIT 1
-    ';
-        if (($rs = $this->queryDB($sql, $con)) && mysqli_num_rows($rs) && ($row = mysqli_fetch_array($rs))) {
-            $this->triple_ids[$val] = $row['t']; /* hack for "don't insert this triple" */
-            return [$row['t']]; /* hack for "don't insert this triple" */
-        }
+        $sql = 'SELECT t
+                  FROM '.$this->store->getTablePrefix().'triple
+                 WHERE s = '.$t['s'].'
+                       AND p = '.$t['p'].'
+                       AND o = '.$t['o'].'
+                       AND o_lang_dt = '.$t['o_lang_dt'].'
+                       AND s_type = '.$t['s_type'].'
+                       AND o_type = '.$t['o_type'].'
+                 LIMIT 1';
+
+        /* hack for "don't insert this triple" */
+        $row = $this->getDBAdapter()->fetchRow($sql);
+        if (isset($row['t'])) {
+            $this->triple_ids[$val] = $row['t'];
+            return array($row['t']);
+
         /* new */
-        else {
+        } else {
             $this->triple_ids[$val] = $this->max_triple_id;
             ++$this->max_triple_id;
             /* split tables ? */
