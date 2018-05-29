@@ -44,7 +44,9 @@ class mysqliAdapter
 
     public function close()
     {
-        return mysqli_close($this->connection);
+        $result = mysqli_close($this->connection);
+        $this->connection = null;
+        return $result;
     }
 
     public function escapeVariable($value)
@@ -79,6 +81,17 @@ class mysqliAdapter
         }
     }
 
+    public function getDBSName()
+    {
+        if (null == $this->connection) {
+            return null;
+        }
+
+        return false !== strpos($this->connection->server_info, 'MariaDB')
+            ? 'mariadb'
+            : 'mysql';
+    }
+
     public function getServerInfo()
     {
         return mysqli_get_server_info($this->connection);
@@ -86,12 +99,12 @@ class mysqliAdapter
 
     public function getErrorCode()
     {
-        return mysqli_connect_errno($this->connection);
+        return mysqli_errno($this->connection);
     }
 
     public function getErrorMsg()
     {
-        return mysqli_connect_error($this->connection);
+        return mysqli_error($this->connection);
     }
 
     public function getNumberOfRows($sql)
@@ -105,11 +118,6 @@ class mysqliAdapter
 
     public function query($sql, $resultmode = \MYSQLI_STORE_RESULT)
     {
-        // if there is no connection, try to connect to server.
-        if (null == $this->connection) {
-            $this->connect();
-        }
-
         return mysqli_query($this->connection, $sql, $resultmode);
     }
 }

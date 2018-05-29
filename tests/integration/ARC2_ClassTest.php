@@ -33,7 +33,15 @@ class ARC2_ClassTest extends ARC2_TestCase
 
     public function testQueryDBInvalidQuery()
     {
-        $result = $this->fixture->queryDB('invalid-query', $this->dbConnection);
+        $result = $this->fixture->queryDB('SHOW TABLES of x', $this->dbConnection);
         $this->assertFalse($result);
+
+        $dbs = 'mariadb' == $this->store->getDBSName() ? 'MariaDB' : 'MySQL';
+
+        $this->assertEquals(
+            "You have an error in your SQL syntax; check the manual that corresponds to your $dbs server version for the "
+            ."right syntax to use near 'of x' at line 1",
+            $this->store->getDBAdapter()->getErrorMsg()
+        );
     }
 }
