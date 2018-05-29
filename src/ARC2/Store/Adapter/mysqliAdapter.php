@@ -1,7 +1,7 @@
 <?php
 
 /**
- * ARC2 RDF Store.
+ * Adapter to enable usage of mysqli_* functions.
  *
  * @author Benjamin Nowack <bnowack@semsol.com>
  * @author Konrad Abicht <konrad.abicht@pier-and-peer.com>
@@ -11,17 +11,13 @@
 
 namespace ARC2\Store\Adapter;
 
-class mysqliAdapter
+class mysqliAdapter extends AbstractAdapter
 {
-    protected $configuration;
-    protected $connection;
-
-    /**
-     * @param array $configuration Default is array(). Only use, if you have your own mysqli connection.
-     */
-    public function __construct(array $configuration = array())
+    public function checkRequirements()
     {
-        $this->configuration = $configuration;
+        if (false == \extension_loaded('mysqli') || false == \function_exists('mysqli_connect')) {
+            throw new \Exception('Extension mysqli is not loaded or fuciton mysqli_connect is not available.');
+        }
     }
 
     public function connect($existingConnection = null)
@@ -116,8 +112,12 @@ class mysqliAdapter
         return 0;
     }
 
-    public function query($sql, $resultmode = \MYSQLI_STORE_RESULT)
+    public function query($sql, $resultmode = null)
     {
+        if (null == $resultmode) {
+            $resultmode = \MYSQLI_STORE_RESULT;
+        }
+
         return mysqli_query($this->connection, $sql, $resultmode);
     }
 }

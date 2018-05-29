@@ -19,10 +19,18 @@ class ARC2_Store extends ARC2_Class
         // adapter provides functions to interact with the database system
         if (null == $this->adapter) {
             // TODO remove that when using namespaces
-            if (!class_exists("\ARC2\Store\Adapter\mysqliAdapter")) {
-                require __DIR__.'/../src/ARC2/Store/Adapter/mysqliAdapter.php';
+            if (!class_exists("\ARC2\Store\Adapter\AdapterFactory")) {
+                require __DIR__.'/../src/ARC2/Store/Adapter/AdapterFactory.php';
             }
-            $this->adapter = new \ARC2\Store\Adapter\mysqliAdapter($this->a);
+
+            // for compatibility reasons, mysqli is preselected in case no adapter was given.
+            // TODO change this to use PDO instead of mysqli
+            if (false == isset($this->a['db_adapter'])) {
+                $this->a['db_adapter'] = 'mysqli';
+            }
+
+            $fac = new \ARC2\Store\Adapter\AdapterFactory();
+            $this->adapter = $fac->getInstanceFor($this->a['db_adapter'], $this->a);
         }
     }
 

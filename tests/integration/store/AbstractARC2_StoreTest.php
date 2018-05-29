@@ -4,32 +4,12 @@ namespace Tests\integration\store;
 
 use Tests\ARC2_TestCase;
 
-class ARC2_StoreTest extends ARC2_TestCase
+/**
+ * Abstract class which provides tests for ARC2_Store. Each subclass has to use another DB adapter
+ * to connect to the database.
+ */
+abstract class AbstractARC2_StoreTest extends ARC2_TestCase
 {
-    public function setUp()
-    {
-        parent::setUp();
-
-        $this->fixture = \ARC2::getStore($this->dbConfig);
-        $this->fixture->createDBCon();
-
-        // remove all tables
-        $tables = $this->fixture->getDBAdapter()->fetchAssoc('SHOW TABLES');
-        if (is_array($tables)) {
-            foreach($tables as $table) {
-                $this->fixture->getDBAdapter()->query('DROP TABLE '. $table[0]);
-            }
-        }
-
-        // fresh setup of ARC2
-        $this->fixture->setup();
-    }
-
-    public function tearDown()
-    {
-        $this->fixture->closeDBCon();
-    }
-
     /**
      * Returns a list of all available graph URIs of the store. It can also respect access control,
      * to only returned available graphs in the current context. But that depends on the implementation
